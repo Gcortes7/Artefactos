@@ -1,0 +1,358 @@
+"""
+Menu de procesamiento de señales EEG + algoritmo pasa banda para artefactos EMG.
+Solo utiliza módulos de la biblioteca estándar de Python: csv, os, glob, math,
+statistics, html y webbrowser.
+
+IMPORTANTE:
+Los CSV de este proyecto contienen potencia por banda (theta, alpha, betaL,
+betaH y gamma), no EEG crudo. Por eso, para estos archivos el equivalente práctico
+del pasa banda 4-25 Hz es conservar theta/alpha/betaL/betaH, quitar gamma y
+reemplazar por interpolación los segmentos sospechosos de EMG.
+"""
+import csv
+import glob
+import html
+import math
+import os
+import statistics
+import webbrowser
+
+BANDAS = ["theta", "alpha", "betaL", "betaH", "gamma"]
+BANDAS_PASO = ["theta", "alpha", "betaL", "betaH"]
+DT = 0.125
+DESCARTE_INICIAL_S = 2.0
+UMBRAL_GAMMA = 4.0
+UMBRAL_BETAH = 3.0
+UNION_S = 0.5
+DURACION_MIN_S = 0.25
+MARGEN_S = 1.0
+SALIDA = "salida_pasabanda"
+
+
+def mediana(valores):
+    valores = [float(v) for v in valores if v is not None and math.isfinite(float(v))]
+    return statistics.median(valores) if valores else 0.0
+
+
+def z_robusto(valores):
+    m = mediana(valores)
+    mad = mediana([abs(v - m) for v in valores]) * 1.4826
+    if mad <= 1e-12:
+        # Evita divisiones por cero cuando la mayoría de muestras son iguales.
+        return [0.0 if abs(v - m) <= 1e-12 else (v - m) / 1e-9 for v in valores]
+    return [(v - m) / mad for v in valores]
+
+
+def cargar_csv(ruta):
+    with open(ruta, "r", newline="", encoding="utf-8-sig") as archivo:
+        lector = csv.DictReader(archivo, skipinitialspace=True)
+        if not lector.fieldnames:
+            raise ValueError("El archivo no tiene encabezados CSV.")
+        encabezados = [h.strip() for h in lector.fieldnames]
+        filas = []
+        for original in lector:
+            fila = {str(k).strip(): (v.strip() if isinstance(v, str) else v)
+                    for k, v in original.items() if k is not None}
+            # Omite filas incompletas o con valores no numéricos en columnas de señal.
+            try:
+                timestamp = float(fila["Timestamp"])
+                if not math.isfinite(timestamp):
+                    continue
+                for columna in encabezados:
+                    if "/" in columna:
+                        valor = float(fila[columna])
+                        if not math.isfinite(valor):
+                            raise ValueError
+                        fila[columna] = valor
+                fila["Timestamp"] = timestamp
+                filas.append(fila)
+            except (KeyError, TypeError, ValueError):
+                continue
+    if len(filas) < 3:
+        raise ValueError("No hay suficientes filas válidas o faltan columnas de potencia.")
+    inicio = filas[0]["Timestamp"]
+    for fila in filas:
+        fila["t"] = fila["Timestamp"] - inicio
+    return encabezados, filas
+
+
+def obtener_canales(encabezados):
+    return sorted({c.split("/", 1)[0] for c in encabezados
+                   if "/" in c and c.split("/", 1)[1] in BANDAS})
+
+
+def potencia_log(filas, canal, banda):
+    return [math.log10(max(float(f[f"{canal}/{banda}"]), 1e-6)) for f in filas]
+
+
+def mascara_emg(filas, canal):
+    zg = z_robusto(potencia_log(filas, canal, "gamma"))
+    zb = z_robusto(potencia_log(filas, canal, "betaH"))
+    return [(zg[i] > UMBRAL_GAMMA and zb[i] > UMBRAL_BETAH
+             and filas[i]["t"] > DESCARTE_INICIAL_S)
+            for i in range(len(filas))]
+
+
+def agrupar_eventos(mascara, tiempos):
+    indices = [i for i, marcado in enumerate(mascara) if marcado]
+    if not indices:
+        return []
+    eventos = []
+    inicio = previo = indices[0]
+    for i in indices[1:]:
+        if tiempos[i] - tiempos[previo] <= UNION_S:
+            previo = i
+        else:
+            eventos.append((inicio, previo))
+            inicio = previo = i
+    eventos.append((inicio, previo))
+    return [(a, b) for a, b in eventos
+            if tiempos[b] - tiempos[a] + DT >= DURACION_MIN_S]
+
+
+def detectar(filas, canales):
+    tiempos = [f["t"] for f in filas]
+    mascaras = {ch: mascara_emg(filas, ch) for ch in canales}
+    eventos = []
+    for canal, mascara in mascaras.items():
+        base = mediana([f[f"{canal}/gamma"] for i, f in enumerate(filas) if not mascara[i]])
+        if base <= 0:
+            base = 1e-9
+        for a, b in agrupar_eventos(mascara, tiempos):
+            pico = max(f[f"{canal}/gamma"] for f in filas[a:b + 1])
+            simultaneos = sum(
+                any(mascaras[otro][a:b + 1]) for otro in mascaras
+            )
+            eventos.append({
+                "canal": canal,
+                "inicio_s": round(tiempos[a], 3),
+                "duracion_s": round(tiempos[b] - tiempos[a] + DT, 3),
+                "pico_gamma": round(pico, 6),
+                "veces_sobre_base": round(pico / base, 3),
+                "canales_simultaneos": simultaneos,
+                "tipo": "global" if simultaneos >= 8 else "local",
+                "_a": a, "_b": b
+            })
+    eventos.sort(key=lambda e: (e["inicio_s"], e["canal"]))
+    return eventos, mascaras
+
+
+def mascara_ventanas(mascara, tiempos):
+    mala = [False] * len(tiempos)
+    margen = int(round(MARGEN_S / DT))
+    for a, b in agrupar_eventos(mascara, tiempos):
+        for i in range(max(0, a - margen), min(len(tiempos), b + margen + 1)):
+            mala[i] = True
+    return mala
+
+
+def interpolar_segmentos(valores, mala):
+    """Interpola linealmente las posiciones marcadas; conserva el resto."""
+    resultado = [float(v) for v in valores]
+    buenos = [i for i, m in enumerate(mala) if not m]
+    if not buenos:
+        return resultado
+    for i, marcada in enumerate(mala):
+        if not marcada:
+            continue
+        izquierda = max((j for j in buenos if j < i), default=None)
+        derecha = min((j for j in buenos if j > i), default=None)
+        if izquierda is None:
+            resultado[i] = resultado[derecha] if derecha is not None else resultado[buenos[0]]
+        elif derecha is None:
+            resultado[i] = resultado[izquierda]
+        else:
+            fraccion = (i - izquierda) / (derecha - izquierda)
+            resultado[i] = resultado[izquierda] + fraccion * (resultado[derecha] - resultado[izquierda])
+    return resultado
+
+
+def escribir_csv(ruta, encabezados, filas):
+    with open(ruta, "w", newline="", encoding="utf-8-sig") as archivo:
+        escritor = csv.DictWriter(archivo, fieldnames=encabezados, extrasaction="ignore")
+        escritor.writeheader()
+        for fila in filas:
+            escritor.writerow({k: fila.get(k, "") for k in encabezados})
+
+
+def guardar_eventos(ruta, eventos):
+    campos = ["canal", "inicio_s", "duracion_s", "pico_gamma",
+              "veces_sobre_base", "canales_simultaneos", "tipo"]
+    with open(ruta, "w", newline="", encoding="utf-8-sig") as archivo:
+        escritor = csv.DictWriter(archivo, fieldnames=campos)
+        escritor.writeheader()
+        for evento in eventos:
+            escritor.writerow({k: evento[k] for k in campos})
+
+
+def guardar_metricas(ruta, filas, canales, mascaras, limpio):
+    campos = ["canal", "banda", "mediana_antes_eventos", "mediana_fuera_eventos",
+              "mediana_despues_eventos", "porcentaje_muestras_interpoladas"]
+    with open(ruta, "w", newline="", encoding="utf-8-sig") as archivo:
+        escritor = csv.DictWriter(archivo, fieldnames=campos)
+        escritor.writeheader()
+        tiempos = [f["t"] for f in filas]
+        for canal in canales:
+            mala = mascara_ventanas(mascaras[canal], tiempos)
+            dentro = [i for i, m in enumerate(mala) if m]
+            fuera = [i for i, m in enumerate(mala) if not m]
+            for banda in BANDAS:
+                originales = [f[f"{canal}/{banda}"] for f in filas]
+                despues = [f.get(f"{canal}/{banda}", originales[i]) for i, f in enumerate(limpio)]
+                escritor.writerow({
+                    "canal": canal, "banda": banda,
+                    "mediana_antes_eventos": mediana([originales[i] for i in dentro]) if dentro else "",
+                    "mediana_fuera_eventos": mediana([originales[i] for i in fuera]) if fuera else "",
+                    "mediana_despues_eventos": mediana([despues[i] for i in dentro]) if dentro and banda in BANDAS_PASO else ("gamma eliminada" if banda == "gamma" else ""),
+                    "porcentaje_muestras_interpoladas": round(100 * sum(mala) / len(mala), 2)
+                })
+
+
+def guardar_grafica_svg(ruta, filas, canal, nombre):
+    """Crea una gráfica SVG sin matplotlib; se puede abrir en cualquier navegador."""
+    tiempos = [f["t"] for f in filas]
+    series = [
+        ("Original (suma de 5 bandas)", [sum(max(0, f.get(f"{canal}/{b}", 0)) for b in BANDAS) for f in filas], "#b03a2e"),
+        ("Pasa banda 4-25 Hz (sin gamma)", [sum(max(0, f.get(f"{canal}/{b}", 0)) for b in BANDAS_PASO) for f in filas], "#d68910"),
+    ]
+    if not tiempos:
+        return
+    ancho, alto = 1100, 700
+    margen_izq, margen_der, margen_sup = 85, 25, 60
+    panel_h, separacion = 245, 55
+    tmax = max(tiempos) or 1
+    max_y = max((v for _, s, _ in series for v in s), default=1) or 1
+    partes = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{ancho}" height="{alto}" viewBox="0 0 {ancho} {alto}">',
+              '<rect width="100%" height="100%" fill="white"/>',
+              f'<text x="{ancho/2}" y="28" text-anchor="middle" font-size="19" font-family="Arial">{html.escape(nombre)} — canal {html.escape(canal)}</text>',
+              '<text x="85" y="48" font-family="Arial" font-size="13">Filtro pasa banda equivalente para CSV de potencia por banda</text>']
+    for k, (titulo, valores, color) in enumerate(series):
+        y0 = margen_sup + k * (panel_h + separacion)
+        ybase = y0 + panel_h
+        partes.append(f'<text x="{margen_izq}" y="{y0-12}" font-family="Arial" font-size="15">{html.escape(titulo)}</text>')
+        partes.append(f'<line x1="{margen_izq}" y1="{y0}" x2="{margen_izq}" y2="{ybase}" stroke="#333"/>')
+        partes.append(f'<line x1="{margen_izq}" y1="{ybase}" x2="{ancho-margen_der}" y2="{ybase}" stroke="#333"/>')
+        for tick in range(5):
+            yy = ybase - tick * panel_h / 4
+            val = max_y * tick / 4
+            partes.append(f'<line x1="{margen_izq}" y1="{yy:.1f}" x2="{ancho-margen_der}" y2="{yy:.1f}" stroke="#dddddd"/>')
+            partes.append(f'<text x="{margen_izq-8}" y="{yy+4:.1f}" text-anchor="end" font-family="Arial" font-size="11">{val:.2g}</text>')
+        puntos = []
+        for t, v in zip(tiempos, valores):
+            x = margen_izq + t / tmax * (ancho - margen_izq - margen_der)
+            y = ybase - v / max_y * panel_h
+            puntos.append(f"{x:.2f},{y:.2f}")
+        partes.append(f'<polyline points="{" ".join(puntos)}" fill="none" stroke="{color}" stroke-width="1.2"/>')
+        partes.append(f'<text x="{(ancho+margen_izq-margen_der)/2}" y="{ybase+25}" text-anchor="middle" font-family="Arial" font-size="12">Tiempo (s)</text>')
+    partes.append('</svg>')
+    with open(ruta, "w", encoding="utf-8") as archivo:
+        archivo.write("\n".join(partes))
+
+
+def procesar_archivo(ruta, abrir_grafica=False):
+    encabezados, filas = cargar_csv(ruta)
+    canales = obtener_canales(encabezados)
+    requeridas = [f"{ch}/{b}" for ch in canales for b in BANDAS]
+    if not canales or any(c not in encabezados for c in requeridas):
+        raise ValueError("No se encontraron columnas de bandas con formato canal/banda (por ejemplo F7/gamma).")
+    eventos, mascaras = detectar(filas, canales)
+    tiempos = [f["t"] for f in filas]
+    limpio = []
+    # Salida con tiempo relativo y únicamente bandas dentro de 4-25 Hz.
+    columnas_salida = ["t"] + [f"{ch}/{b}" for ch in canales for b in BANDAS_PASO]
+    for i, fila in enumerate(filas):
+        limpio.append({"t": fila["t"]})
+        for canal in canales:
+            mala = mascara_ventanas(mascaras[canal], tiempos)
+            # La interpolación se calcula para cada canal/banda más abajo.
+            for banda in BANDAS_PASO:
+                limpio[-1][f"{canal}/{banda}"] = fila[f"{canal}/{banda}"]
+    for canal in canales:
+        mala = mascara_ventanas(mascaras[canal], tiempos)
+        for banda in BANDAS_PASO:
+            valores = interpolar_segmentos([f[f"{canal}/{banda}"] for f in filas], mala)
+            for i, valor in enumerate(valores):
+                limpio[i][f"{canal}/{banda}"] = valor
+
+    os.makedirs(SALIDA, exist_ok=True)
+    nombre = os.path.splitext(os.path.basename(ruta))[0]
+    escribir_csv(os.path.join(SALIDA, nombre + "_limpio.csv"), columnas_salida, limpio)
+    guardar_eventos(os.path.join(SALIDA, nombre + "_eventos.csv"), eventos)
+    guardar_metricas(os.path.join(SALIDA, nombre + "_metricas.csv"), filas, canales, mascaras, limpio)
+    canal_grafica = "F7" if "F7" in canales else canales[0]
+    grafica = os.path.join(SALIDA, nombre + "_comparacion.svg")
+    guardar_grafica_svg(grafica, filas, canal_grafica, nombre)
+    print(f"\nArchivo: {os.path.basename(ruta)}")
+    print(f"Muestras válidas: {len(filas)} | Canales: {len(canales)} | Eventos detectados: {len(eventos)}")
+    print(f"  CSV limpio: {os.path.join(SALIDA, nombre + '_limpio.csv')}")
+    print(f"  Eventos:    {os.path.join(SALIDA, nombre + '_eventos.csv')}")
+    print(f"  Métricas:   {os.path.join(SALIDA, nombre + '_metricas.csv')}")
+    print(f"  Gráfica:    {grafica}")
+    if abrir_grafica:
+        webbrowser.open("file://" + os.path.abspath(grafica))
+    return len(eventos)
+
+
+def seleccionar_archivos():
+    ruta = input("Escribe la ruta de un archivo CSV o de una carpeta con CSV: ").strip().strip('"')
+    if os.path.isdir(ruta):
+        archivos = sorted(glob.glob(os.path.join(ruta, "*.csv")))
+    elif os.path.isfile(ruta) and ruta.lower().endswith(".csv"):
+        archivos = [ruta]
+    else:
+        archivos = []
+    if not archivos:
+        print("No se encontraron archivos CSV en esa ruta.")
+    return archivos
+
+
+def ejecutar_pasabanda():
+    archivos = seleccionar_archivos()
+    if not archivos:
+        return
+    total = 0
+    for ruta in archivos:
+        try:
+            total += procesar_archivo(ruta, abrir_grafica=False)
+        except Exception as error:
+            print(f"No se pudo procesar {os.path.basename(ruta)}: {error}")
+    print(f"\nProceso terminado. Total de eventos detectados: {total}")
+    print(f"Los resultados están en la carpeta: {os.path.abspath(SALIDA)}")
+    if input("¿Abrir la gráfica del último archivo procesado? (s/n): ").strip().lower() == "s":
+        posibles = sorted(glob.glob(os.path.join(SALIDA, "*_comparacion.svg")))
+        if posibles:
+            webbrowser.open("file://" + os.path.abspath(posibles[-1]))
+
+
+def mostrar_menu():
+    print("\n" + "=" * 55)
+    print("       MENÚ DE PROCESAMIENTO DE SEÑALES")
+    print("=" * 55)
+    print("1. Equipo 1 - Fast_ICA (no integrado)")
+    print("2. Equipo 2 - Wavelet_ICA (no integrado)")
+    print("3. Equipo 3 - Filtro pasa banda / artefactos EMG")
+    print("4. Equipo 4 - InterferenciaModifier (no integrado)")
+    print("5. Equipo 5 - ICA (no integrado)")
+    print("6. Equipo 6 - ExtendInfomax_ICA (no integrado)")
+    print("7. Equipo 7 - Artefacto_NoRaw (no integrado)")
+    print("0. Salir")
+    print("=" * 55)
+
+
+def main():
+    while True:
+        mostrar_menu()
+        opcion = input("Selecciona una opción (0-7): ").strip()
+        if opcion == "0":
+            print("Saliendo del programa. ¡Hasta pronto!")
+            break
+        elif opcion == "3":
+            ejecutar_pasabanda()
+        elif opcion in {"1", "2", "4", "5", "6", "7"}:
+            print("Ese algoritmo todavía no está integrado. Selecciona la opción 3 para usar pasa banda.")
+        else:
+            print("Opción no válida. Intenta nuevamente.")
+
+
+if __name__ == "__main__":
+    main()
