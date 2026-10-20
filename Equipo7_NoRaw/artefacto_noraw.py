@@ -2,8 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 ===============================================================================
-ARTEFACTO_NORAW — Eliminacion de artefactos sobre datos EEG NO CRUDOS
+CARE — Correccion de Artefactos por Razones Espectrales
 ===============================================================================
+Metodo desarrollado por el equipo 7 para el tema ARTEFACTO_NORAW:
+eliminacion de artefactos sobre datos EEG que NO son crudos.
+
 Equipo 7  ·  Inteligencia Artificial 5801 IA 2026-2
 Integrantes: Nestor Gael Lara Juarez  ·  Diego Guzman Rodriguez
 Profesora:   Griselda Cortes Barrera
@@ -108,7 +111,8 @@ import pandas as pd
 
 EQUIPO = {
     "numero": 7,
-    "algoritmo": "Artefacto_NoRaw",
+    "metodo": "CARE — Correccion de Artefactos por Razones Espectrales",
+    "algoritmo": "Artefacto_NoRaw",  # tema asignado al equipo
     "integrantes": ["Nestor Gael Lara Juarez", "Diego Guzman Rodriguez"],
     "materia": "Inteligencia Artificial — 5801 IA 2026-2",
     "profesora": "Griselda Cortes Barrera",
@@ -294,6 +298,12 @@ def corregir_serie(valores: np.ndarray, mascara: np.ndarray) -> tuple[np.ndarray
     banda varia lentamente dentro de una sesion: los vecinos inmediatos son
     mejor estimador que cualquier estadistico global, y la interpolacion
     preserva la continuidad de la serie, que es lo que un artefacto rompe.
+
+    La interpolacion se limita al interior de la serie. Una muestra marcada al
+    principio o al final no tiene vecino limpio por un lado, y rellenarla
+    arrastrando el valor contiguo produce un registro copiado en vez de medido.
+    En ese caso se conserva el valor original: es preferible dejar sin corregir
+    una muestra en el borde que fabricar el dato.
     """
     if not mascara.any():
         return valores, 0
@@ -306,6 +316,12 @@ def corregir_serie(valores: np.ndarray, mascara: np.ndarray) -> tuple[np.ndarray
 
     s = pd.Series(valores.copy(), dtype=float)
     s[mascara] = np.nan
+    # Se interpola en ambas direcciones para cubrir tambien las muestras
+    # marcadas en los extremos de la serie. Ojo: esto solo es seguro porque
+    # los registros incompletos se descartan ANTES de procesar. Si una fila
+    # truncada llega hasta aqui, sus campos vacios entran como NaN y la
+    # interpolacion los rellena copiando la fila anterior, con lo que el
+    # archivo termina con un registro que nadie midio.
     s = s.interpolate(method="linear", limit_direction="both")
     if s.isna().any():
         s = s.fillna(float(np.nanmedian(valores[limpias])))
@@ -333,6 +349,16 @@ def limpiar_archivo(ruta_entrada, carpeta_salida=None, verbose=True) -> dict:
         raise FileNotFoundError(f"No se encontro el archivo: {ruta}")
 
     df, sep = leer_csv(ruta)
+
+    # Registros incompletos: la grabacion de la mayoria de los archivos se
+    # corto a media escritura y dejo una ultima fila truncada. No es un dato
+    # parcial recuperable, es un registro que nunca se termino de escribir.
+    # Con autorizacion de la profesora se eliminan antes de procesar, para que
+    # el algoritmo no trabaje sobre valores que no existen.
+    antes = len(df)
+    df = df.dropna(how="all").dropna(how="any").reset_index(drop=True)
+    descartados = antes - len(df)
+
     mapa = mapa_senal(df)
     cols = [mapa[k] for k in sorted(mapa.keys())]
 
@@ -430,6 +456,7 @@ def limpiar_archivo(ruta_entrada, carpeta_salida=None, verbose=True) -> dict:
         "sujeto": sujeto,
         "tarea": tarea,
         "registros": int(len(df)),
+        "registros_descartados": int(descartados),
         "columnas": int(df.shape[1]),
         "variables_senal": len(cols),
         "muestras_ocular": int(d_eog.sum()),
@@ -447,6 +474,8 @@ def limpiar_archivo(ruta_entrada, carpeta_salida=None, verbose=True) -> dict:
     if verbose:
         print(f"  {ruta.name}")
         print(f"     -> {nombre_salida}")
+        if descartados:
+            print(f"     {descartados} registro(s) incompleto(s) descartado(s)")
         print(f"     {r['registros']} registros conservados · "
               f"{celdas:,} celdas corregidas ({r['pct_celdas']}%)")
         print(f"     ocular: {r['muestras_ocular']} muestras · "
@@ -484,7 +513,9 @@ def limpiar_carpeta(carpeta, carpeta_salida=None, verbose=True) -> pd.DataFrame:
 
     print(f"\n{'=' * 62}")
     print(f"  Archivos procesados ....... {len(d)}")
-    print(f"  Registros conservados ..... {int(d.registros.sum()):,} (100%)")
+    print(f"  Registros conservados ..... {int(d.registros.sum()):,}")
+    if "registros_descartados" in d and d.registros_descartados.sum():
+        print(f"  Registros incompletos ..... {int(d.registros_descartados.sum()):,} descartados")
     print(f"  Celdas corregidas ......... {int(d.celdas_corregidas.sum()):,} "
           f"({d.pct_celdas.mean():.2f}% en promedio)")
     print(f"  Ceros eliminados .......... {int(d.ceros_antes.sum()):,} -> "
@@ -504,8 +535,11 @@ def info() -> None:
     """Muestra la informacion del equipo y del algoritmo asignado."""
     L = 64
     print("\n" + "=" * L)
-    print(f"  EQUIPO {EQUIPO['numero']}  —  {EQUIPO['algoritmo']}".center(L))
+    print(f"  EQUIPO {EQUIPO['numero']}  —  CARE".center(L))
+    print("  Correccion de Artefactos por Razones Espectrales".center(L))
     print("=" * L)
+    print()
+    print(f"  Tema asignado: {EQUIPO['algoritmo']}")
     print()
     print("  INTEGRANTES")
     for n in EQUIPO["integrantes"]:
@@ -638,7 +672,7 @@ def menu() -> None:
     """Menu del equipo 7. Es lo que se ejecuta desde la opcion 7 del Menu.ipynb."""
     while True:
         print("\n" + "=" * 64)
-        print(f"   EQUIPO {EQUIPO['numero']} — {EQUIPO['algoritmo']}".center(64))
+        print(f"   EQUIPO {EQUIPO['numero']} — CARE ({EQUIPO['algoritmo']})".center(64))
         print("=" * 64)
         print("  1. Ver informacion del equipo y del algoritmo")
         print("  2. Limpiar un archivo o carpeta (sube tu CSV)")

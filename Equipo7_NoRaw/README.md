@@ -1,4 +1,7 @@
-# Equipo 7 — Artefacto_NoRaw
+# Equipo 7 — CARE
+
+**Corrección de Artefactos por Razones Espectrales**
+Método desarrollado para el tema asignado `Artefacto_NoRaw`.
 
 **Integrantes:** Nestor Gael Lara Juárez · Diego Guzmán Rodríguez
 **Materia:** Inteligencia Artificial — 5801 IA 2026-2
@@ -127,11 +130,11 @@ justo donde el detector debería ser más sensible.
 
 | Indicador | Resultado |
 |---|---|
-| Registros | 27,738 — conservados al 100% |
-| Celdas corregidas | 5.3% en promedio |
-| Celdas sin señal (cero exacto) | 7,264 → 0 |
+| Registros | 27,717 — se descartaron 21 registros incompletos del origen |
+| Celdas corregidas | 92,625 · 5.15% en promedio |
+| Celdas sin señal (cero exacto) | 6,442 → 0 |
 | Reducción del artefacto ocular | 88.8% (mediana, donde se detectó) |
-| Correlación con el original | 0.956 (media, escala logarítmica) |
+| Correlación con el original | 0.957 (media, escala logarítmica) |
 | Validación | 19 de 20 aprobados |
 
 El archivo restante, `222260245_PullPush`, supera cuatro de los cinco criterios:
@@ -154,8 +157,35 @@ la mediana y no hay pico que detectar.
 Equipo7_NoRaw/
 ├── artefacto_noraw.py          El algoritmo, ejecutable e importable
 ├── README.md                   Este archivo
+├── INDICE_ORIGINALES.csv       Registros, columnas, MD5 y par limpio de cada original
+├── datos_originales/           Los 20 datasets ANTES del tratamiento
+│   ├── *.csv                   Sin modificar, con sus nombres de origen
+│   └── README.md               Qué contienen y sus inconsistencias
 ├── datos_limpios/              Los 20 datasets procesados
 │   ├── *_NoRaw_Clean.csv
 │   └── reporte_limpieza.csv
 └── reportes/                   Excel con tablas y gráficas
 ```
+
+## Registros incompletos del origen
+
+La grabación de 18 de los 20 archivos se cortó a media escritura y dejó una
+última fila truncada. En `2212605_PullPush` son dos: la penúltima incompleta y
+la última vacía del todo. Los dos archivos de `222260210` son los únicos sin
+ella, que son precisamente los duplicados — un archivo copiado no pasa por el
+corte.
+
+Con autorización de la profesora esos **21 registros se descartan antes de
+procesar**, por dos razones. La primera es que WEKA aborta la carga cuando una
+fila trae menos campos que la cabecera. La segunda es más importante: una fila
+truncada llega a la corrección con sus campos vacíos convertidos en `NaN`, y la
+interpolación los rellena copiando la fila anterior. Una versión previa del
+programa producía exactamente eso, con la última fila de `2212605_PushPull`
+idéntica a la penúltima en las 70 variables — un registro que nadie midió.
+
+Descartarlos elimina la causa de raíz. Una comprobación sobre los veinte
+archivos confirma que no queda ninguna fila repetida, y los ceros exactos
+vuelven a quedar en cero.
+
+Es la única desviación respecto del requisito de conservar el número de
+registros, y queda anotada aquí por eso.

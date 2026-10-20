@@ -1,0 +1,21 @@
+archivo_original,sujeto,tarea,registros,columnas,separador,md5_original,archivo_limpio,registros_limpio,columnas_limpio,registros_coinciden,nota
+212260569PushPull.csv,212260569,PushPull,844,71,coma,8647e80bbe357c408cf04eed031ed501,212260569_PushPull_NoRaw_Clean.csv,844,71,si,
+212260569_LeftRight.csv,212260569,LeftRight,877,71,coma,d63a0fb1ba9dbfb384c423b30daea81c,212260569_LeftRight_NoRaw_Clean.csv,877,71,si,
+212260666_leftRight.csv,212260666,LeftRight,930,71,coma,5bbeabb0be0e4f223c50b524b239a53e,212260666_LeftRight_NoRaw_Clean.csv,930,71,si,
+212260666_pullPush.csv,212260666,PushPull,847,71,coma,365e5555435307b648960d8d20c3f262,212260666_PushPull_NoRaw_Clean.csv,847,71,si,
+212260668_leftRight.csv,212260668,LeftRight,922,71,coma,71f408561d94c1ad30674b580661291b,212260668_LeftRight_NoRaw_Clean.csv,922,71,si,
+212260668_pullPush.csv,212260668,PushPull,708,71,coma,831f6244d5e63ea34d25ec0e31f2fe91,212260668_PushPull_NoRaw_Clean.csv,708,71,si,
+212260672_LeftRigth.csv,212260672,LeftRight,679,71,coma,548eb670983e2ceb9019f06368bd4adf,212260672_LeftRight_NoRaw_Clean.csv,679,71,si,
+212260672_PushPull.csv,212260672,PushPull,664,71,coma,36c3d42f3bdb4a1695c1ee041a23b3ca,212260672_PushPull_NoRaw_Clean.csv,664,71,si,
+2212605_LeftRight.csv,2212605,LeftRight,1676,73,punto y coma,db56bd33b6dc800b7ac118db143cdce7,2212605_LeftRight_NoRaw_Clean.csv,1676,73,si,
+2212605_PullPush.csv,2212605,PushPull,1363,73,punto y coma,593db449535d55c8f95ef510f9c9faeb,2212605_PushPull_NoRaw_Clean.csv,1363,73,si,
+222260210_LeftRight.csv,222260210,LeftRight,3303,73,coma,489de797535a5684bfb230b85860ac5c,222260210_LeftRight_NoRaw_Clean.csv,3303,73,si,copia byte por byte de 222260210_PullPush.csv
+222260210_PullPush.csv,222260210,PushPull,3303,73,coma,489de797535a5684bfb230b85860ac5c,222260210_PushPull_NoRaw_Clean.csv,3303,73,si,copia byte por byte de 222260210_LeftRight.csv
+222260216_LeftRight.csv,222260216,LeftRight,1614,71,coma,d12c528629801750721302b484483300,222260216_LeftRight_NoRaw_Clean.csv,1614,71,si,
+222260216_PullPush.csv,222260216,PushPull,1614,71,coma,94e2f0f0770a35cab2bdb8c105965959,222260216_PushPull_NoRaw_Clean.csv,1614,71,si,
+222260245_LeftRight.csv,222260245,LeftRight,1583,71,coma,b42831942f0061228d6e290d3b85c4f3,222260245_LeftRight_NoRaw_Clean.csv,1583,71,si,
+222260245_PullPush.csv,222260245,PushPull,1731,71,coma,996cd4e62762475179eb326d8e5cd416,222260245_PushPull_NoRaw_Clean.csv,1731,71,si,
+222260350_LeftRight.csv,222260350,LeftRight,1700,71,coma,ba10e1b84a4b381fa43f56e8a5ea7483,222260350_LeftRight_NoRaw_Clean.csv,1700,71,si,
+222260350_PullPush.csv,222260350,PushPull,1756,71,coma,31e0a83823a91191c79abdf46794fcee,222260350_PushPull_NoRaw_Clean.csv,1756,71,si,
+222260671_LeftRigth.csv,222260671,LeftRight,810,71,coma,c27aef2c605fd0189655d92f536a0d01,222260671_LeftRight_NoRaw_Clean.csv,810,71,si,
+222260671_PushPull.csv,222260671,PushPull,814,71,coma,cf36e760f8c80fffc94e7cab4ed977e7,222260671_PushPull_NoRaw_Clean.csv,814,71,si,
